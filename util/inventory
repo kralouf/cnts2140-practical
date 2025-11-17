@@ -1,0 +1,11 @@
+# util/inventory
+SERVERA_HOST=servera
+SERVERA_USER=student
+
+SERVERB_HOST=serverb
+SERVERB_USER=student
+
+WORKSTATION_HOST=workstation
+WORKSTATION_USER=student
+
+LAB_PASSWORD=student
