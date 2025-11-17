@@ -6,6 +6,10 @@ BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 1) Integrity check (repo files)
 ( cd "$BASE_DIR" && sha256sum -c sha256sums.txt )
 
+# 2) Load helpers
+# shellcheck disable=SC1091
+source "$BASE_DIR/util/common.sh"
+
 echo "[*] Deploying baseline to servera/serverb..."
 sshsudo_file "student" "servera.lab.example.com" "$BASE_DIR/proctor/baseline.sh" "/root/baseline.sh"
 sshsudo "student" "servera.lab.example.com" "/root/baseline.sh"
