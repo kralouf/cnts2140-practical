@@ -1,11 +1,11 @@
 # util/inventory
-SERVERA_HOST=servera
+SERVERA_HOST=servera.lab.example.com
 SERVERA_USER=student
 
-SERVERB_HOST=serverb
+SERVERB_HOST=serverb.lab.example.com
 SERVERB_USER=student
 
-WORKSTATION_HOST=workstation
+WORKSTATION_HOST=workstation.lab.example.com
 WORKSTATION_USER=student
 
 LAB_PASSWORD=student
