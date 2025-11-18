@@ -3,7 +3,15 @@ set -euo pipefail
 
 SERVERA="servera"
 SERVERB="serverb"
-SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -q"
+
+# SSH options with connection multiplexing to avoid repeated password prompts
+CONTROL_PATH="/tmp/ssh-%r@%h:%p"
+SSHOPTS="-o StrictHostKeyChecking=no \
+         -o UserKnownHostsFile=/dev/null \
+         -o ConnectTimeout=5 \
+         -o ControlMaster=auto \
+         -o ControlPath=${CONTROL_PATH} \
+         -o ControlPersist=300 -q"
 
 PASS=0; FAIL=0; TOTAL=0
 REPORT="/home/student/grade_report.txt"; : > "$REPORT"
@@ -31,13 +39,19 @@ mark(){
     fi
 }
 
+# SSH helpers
 rcmd(){ ssh $SSHOPTS "student@$1" "${2:-true}"; }
 rsudo(){ ssh $SSHOPTS "student@$1" "echo student | sudo -S bash -lc '$2'"; }
 gre(){ grep -Eq "$2" <<<"$1"; }
 
+# Prime SSH master connections (one password prompt per host)
+ssh $SSHOPTS -MNf "student@$SERVERA" || true
+ssh $SSHOPTS -MNf "student@$SERVERB" || true
+
 say "=== RHEL Practical Auto-Grader ==="
 say "$(date)"
 
+# Helper: check reboot after exam marker
 check_reboot(){
   local host="$1"
   local boot exam
@@ -45,6 +59,22 @@ check_reboot(){
   exam=$(rsudo "$host" "cat /root/.exam_start 2>/dev/null || echo 0")
   [[ ${boot:-0} -gt ${exam:-0} ]]
 }
+
+# ---- SHORT-CIRCUIT: pristine environment -> 0/49 ----
+# If there is no webops group and no alice user on servera,
+# we assume the student hasn't started the exam yet.
+if ! rcmd "$SERVERA" "getent group webops >/dev/null" && \
+   ! rcmd "$SERVERA" "getent passwd alice >/dev/null"; then
+    TOTAL=49
+    PASS=0
+    FAIL=49
+    summary "Environment appears unconfigured (no exam users/groups found)."
+    summary "RESULT: FAIL"
+    summary "SCORE: 0/$TOTAL = 0%"
+    summary "Report saved to: $REPORT"
+    exit 1
+fi
+# ------------------------------------------------------
 
 say "\n[SELinux enforcing]"
 mark rcmd "$SERVERA" "getenforce | grep -xq Enforcing"
