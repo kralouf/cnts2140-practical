@@ -30,10 +30,14 @@ sshcopy() {
 sshsudo_file() {
     local host=$1 user=$2 src=$3 dest=$4
 
-    echo "[*] Copying $src to $host:$dest"
-    sshcopy "$host" "$user" "$src" "$dest"
+    # Copy to a temp path that "user" can write to
+    local tmp="/tmp/$(basename "$src")"
 
-    echo "[*] Making $dest executable on $host"
+    echo "[*] Copying $src to $host:$tmp"
+    sshcopy "$host" "$user" "$src" "$tmp"
+
+    echo "[*] Moving $tmp to $dest and making it executable on $host"
+    sshsudo "$host" "$user" mv "$tmp" "$dest"
     sshsudo "$host" "$user" chmod +x "$dest"
 
     echo "[*] Executing $dest on $host as root"
