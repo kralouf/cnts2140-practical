@@ -23,8 +23,9 @@ sshsudo_file "$SERVERB_HOST" "$SERVERB_USER" "$BASE_DIR/inject/serverb_inject.sh
 
 echo "[*] Installing grader on workstation..."
 # Copy + lock grader
-sshsudo_file "$WORKSTATION_HOST" "$WORKSTATION_USER" "$BASE_DIR/grader/grade_practical.sh" "/usr/local/bin/grade_practical.sh"
-sshsudo "$WORKSTATION_HOST" "$WORKSTATION_USER" "chown root:root /usr/local/bin/grade_practical.sh && chmod 0555 /usr/local/bin/grade_practical.sh && chattr +i /usr/local/bin/grade_practical.sh || true"
+sshsudo_file "$WORKSTATION_HOST" "$WORKSTATION_USER" "$BASE_DIR/grader/grader.sh" "/usr/local/bin/grader.sh"
+sshsudo "$WORKSTATION_HOST" "$WORKSTATION_USER" "chown root:root /usr/local/bin/grader.sh && chmod 0555 /usr/local/bin/grader.sh && chattr +i /usr/local/bin/grader.sh || true"
 
 echo "[*] Done."
-echo "Now students run:  grade_practical.sh"
+echo "Now students run:  grader.sh"
+echo "Pre-Requisites are complete, good luck!"
