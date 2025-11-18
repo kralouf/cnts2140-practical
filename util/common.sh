@@ -6,39 +6,45 @@ UTIL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./inventory
 . "$UTIL_DIR/inventory"
 
-SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-
 # Basic ssh runner
 sshrun() {
     local host=$1 user=$2
     shift 2
-    ssh $SSH_OPTS "${user}@${host}" "$@"
+    ssh -o StrictHostKeyChecking=no "${user}@${host}" "$@"
 }
 
-# Run a command remotely using sudo (non-interactive)
-# Uses LAB_PASSWORD from inventory to feed sudo on the remote host.
+# Run a command remotely using sudo with password from LAB_PASSWORD
 sshsudo() {
     local host=$1 user=$2
     shift 2
     local cmd="$*"
 
-    ssh $SSH_OPTS "${user}@${host}" \
-      "echo \"$LAB_PASSWORD\" | sudo -S bash -lc '$cmd'"
+    # Send LAB_PASSWORD to sudo via stdin (-S), suppress prompt (-p '')
+    ssh -o StrictHostKeyChecking=no "${user}@${host}" \
+        "echo \"$LAB_PASSWORD\" | sudo -S -p '' $cmd"
 }
+
 
 # Copy a file to a remote host
 sshcopy() {
     local host=$1 user=$2 src=$3 dest=$4
-    scp $SSH_OPTS "$src" "${user}@${host}:$dest"
+    scp -o StrictHostKeyChecking=no "$src" "${user}@${host}:$dest"
 }
 
-# Copy a script to a remote host and make it executable (but DO NOT run it)
+# Copy a script to a remote host, chmod +x it, then run it with sudo
 sshsudo_file() {
     local host=$1 user=$2 src=$3 dest=$4
 
-    echo \"[*] Copying $src to $host:$dest\"
-    sshcopy \"$host\" \"$user\" \"$src\" \"$dest\"
+    # Copy to a temp path that "user" can write to
+    local tmp="/tmp/$(basename "$src")"
 
-    echo \"[*] Setting mode on $host:$dest\"
-    sshsudo \"$host\" \"$user\" \"chmod +x '$dest'\"
+    echo "[*] Copying $src to $host:$tmp"
+    sshcopy "$host" "$user" "$src" "$tmp"
+
+    echo "[*] Moving $tmp to $dest and making it executable on $host"
+    sshsudo "$host" "$user" mv "$tmp" "$dest"
+    sshsudo "$host" "$user" chmod +x "$dest"
+
+    echo "[*] Executing $dest on $host as root"
+    sshsudo "$host" "$user" "$dest"
 }
