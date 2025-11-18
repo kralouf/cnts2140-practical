@@ -1,4 +1,3 @@
-# util/inventory
 SERVERA_HOST=servera.lab.example.com
 SERVERA_USER=student
 
