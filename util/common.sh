@@ -13,11 +13,15 @@ sshrun() {
     ssh -o StrictHostKeyChecking=no "${user}@${host}" "$@"
 }
 
-# Run a command remotely using sudo (non-interactive)
+# Run a command remotely using sudo with password from LAB_PASSWORD
 sshsudo() {
     local host=$1 user=$2
     shift 2
-    sshrun "$host" "$user" sudo -n "$@"
+    local cmd="$*"
+
+    # Send LAB_PASSWORD to sudo via stdin (-S), suppress prompt (-p '')
+    ssh -o StrictHostKeyChecking=no "${user}@${host}" \
+        "echo \"$LAB_PASSWORD\" | sudo -S -p '' $cmd"
 }
 
 # Copy a file to a remote host
