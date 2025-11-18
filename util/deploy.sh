@@ -22,10 +22,18 @@ echo "[*] Injecting serverb..."
 sshsudo_file "$SERVERB_HOST" "$SERVERB_USER" "$BASE_DIR/inject/serverb_inject.sh" "/root/serverb_inject.sh"
 
 echo "[*] Installing grader on workstation..."
-# Copy + lock grader
-sshsudo_file "$WORKSTATION_HOST" "$WORKSTATION_USER" "$BASE_DIR/grader/grader.sh" "/usr/local/bin/grader.sh"
-sshsudo "$WORKSTATION_HOST" "$WORKSTATION_USER" "chown root:root /usr/local/bin/grader.sh && chmod 0555 /usr/local/bin/grader.sh && chattr +i /usr/local/bin/grader.sh || true"
+# Copy grader to /tmp
+sshcopy "$WORKSTATION_HOST" "$WORKSTATION_USER" "$BASE_DIR/grader/grader.sh" "/tmp/grader.sh"
+
+# Move into place, lock it down, but DO NOT run it
+sshsudo "$WORKSTATION_HOST" "$WORKSTATION_USER" \
+  "mv /tmp/grader.sh /usr/local/bin/grader.sh && \
+   chown root:root /usr/local/bin/grader.sh && \
+   chmod 0555 /usr/local/bin/grader.sh && \
+   chattr +i /usr/local/bin/grader.sh || true"
 
 echo "[*] Done."
 echo "Now students run:  grader.sh"
 echo "Pre-Requisites are complete, good luck!"
+
+

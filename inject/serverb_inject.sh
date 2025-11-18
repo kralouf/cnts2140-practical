@@ -8,7 +8,7 @@ setenforce 1
 
 # Ensure no web stack
 systemctl disable --now httpd 2>/dev/null || true
-dnf -y remove httpd mod_ssl 2>/dev/null || true
+dnf -y remove httpd mod_ssl >/dev/null 2>&1 || true
 
 # SSH on high port but *without* SELinux/firewalld initially
 NEWPORT=52222
