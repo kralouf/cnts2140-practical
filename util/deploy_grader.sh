@@ -17,7 +17,7 @@ sshcopy "$WORKSTATION_HOST" "$WORKSTATION_USER" "$BASE_DIR/grader/grader.sh" "/t
 
 # Move into place, lock it down, but DO NOT run it
 sshsudo "$WORKSTATION_HOST" "$WORKSTATION_USER" \
-  "sudo mv /tmp/grader.sh /usr/local/bin/grader.sh && \
+  "mv /tmp/grader.sh /usr/local/bin/grader.sh && \
    sudo chown root:root /usr/local/bin/grader.sh && \
    sudo chmod 0555 /usr/local/bin/grader.sh && \
    sudo chattr +i /usr/local/bin/grader.sh || true"
