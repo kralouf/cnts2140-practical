@@ -1,28 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# shellcheck disable=SC1091
-source "$(dirname "$0")/inventory"
+# Figure out where we are and load inventory
+UTIL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./inventory
+. "$UTIL_DIR/inventory"
 
-SSH_OPTS=(
-  -o BatchMode=yes
-  -o StrictHostKeyChecking=no
-  -o UserKnownHostsFile=/dev/null
-  -o ConnectTimeout=5
-)
-
-# Use sshpass so students do not need to set up SSH keys for the exam
-sshsudo() {
-  local user host cmd
-  user="$1"; host="$2"; shift 2
-  cmd="$*"
-  sshpass -p "$LAB_PASSWORD" ssh "${SSH_OPTS[@]}" "${user}@${host}" "sudo bash -lc '$cmd'"
+# Basic ssh runner
+sshrun() {
+    local host=$1 user=$2
+    shift 2
+    ssh -o StrictHostKeyChecking=no "${user}@${host}" "$@"
 }
 
+# Run a command remotely using sudo (non-interactive)
+sshsudo() {
+    local host=$1 user=$2
+    shift 2
+    sshrun "$host" "$user" sudo -n "$@"
+}
+
+# Copy a file to a remote host
+sshcopy() {
+    local host=$1 user=$2 src=$3 dest=$4
+    scp -o StrictHostKeyChecking=no "$src" "${user}@${host}:$dest"
+}
+
+# Copy a script to a remote host, chmod +x it, then run it with sudo
 sshsudo_file() {
-  local user host src dst
-  user="$1"; host="$2"; src="$3"; dst="$4"
-  # copy to a temp path then sudo-move into place with correct perms if needed
-  sshpass -p "$LAB_PASSWORD" scp "${SSH_OPTS[@]}" "$src" "${user}@${host}:/tmp/.upl.$$"
-  sshpass -p "$LAB_PASSWORD" ssh "${SSH_OPTS[@]}" "${user}@${host}" "sudo install -m 700 -o root -g root /tmp/.upl.$$ '$dst'; rm -f /tmp/.upl.$$"
+    local host=$1 user=$2 src=$3 dest=$4
+
+    echo "[*] Copying $src to $host:$dest"
+    sshcopy "$host" "$user" "$src" "$dest"
+
+    echo "[*] Making $dest executable on $host"
+    sshsudo "$host" "$user" chmod +x "$dest"
+
+    echo "[*] Executing $dest on $host as root"
+    sshsudo "$host" "$user" "$dest"
 }
