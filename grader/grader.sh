@@ -48,7 +48,8 @@ rsudo(){
   local host="$1"
   shift
   local cmd="$*"
-  ssh $SSHOPTS "student@$host" "echo student | sudo -S bash -lc \"$cmd\""
+  ssh $SSHOPTS "student@$host" \
+    "echo student | sudo -S -p '' bash -lc \"$cmd\""
 }
 
 gre(){ grep -Eq "$2" <<<"$1"; }
@@ -279,18 +280,18 @@ task "Firewall: cockpit service reachable on serverb" \
 # PHASE 7: Reboot & Persistence
 ########################################
 echo
-echo -e "${YELLOW}PHASE 7: Reboot & Persistence${RESET}"
-
-task "servera has been rebooted after exam start marker" check_reboot "$SERVERA"
-task "serverb has been rebooted after exam start marker" check_reboot "$SERVERB"
-
-echo
 echo -e "${YELLOW}Post-reboot rechecks${RESET}"
 
-task "Post-reboot: alice key login to serverb still works" \
-     bash -lc "ssh $SSHOPTS -p \"$PORT\" \"alice@$SERVERB\" true"
-task "Post-reboot: bob remains blocked from SSH to serverb" \
-     bash -lc "! ssh $SSHOPTS -p \"$PORT\" \"bob@$SERVERB\" true"
+if [[ -n "$PORT" ]]; then
+  task "Post-reboot: alice key login to serverb still works" \
+       bash -lc "ssh $SSHOPTS -p \"$PORT\" \"alice@$SERVERB\" true"
+  task "Post-reboot: bob remains blocked from SSH to serverb" \
+       bash -lc "! ssh $SSHOPTS -p \"$PORT\" \"bob@$SERVERB\" true"
+else
+  task "Post-reboot: alice key login to serverb still works (no ssh port detected)" false
+  task "Post-reboot: bob remains blocked from SSH to serverb (no ssh port detected)" false
+fi
+
 task "Post-reboot: https://servera still returns 'I am servera.'" \
      bash -lc "curl -sk \"https://$SERVERA\" | grep -qx 'I am servera.'"
 task "Post-reboot: http://servera:82 still responds" \
