@@ -13,9 +13,11 @@ SSHOPTS="-o StrictHostKeyChecking=no \
          -o ControlPath=${CONTROL_PATH} \
          -o ControlPersist=300 -q"
 
-PASS=0
-FAIL=0
-TOTAL=0
+PASS=0          # tasks passed
+FAIL=0          # tasks failed
+TOTAL=0         # total tasks
+POINTS_PASS=0   # points (2 per task)
+POINTS_TOTAL=0  # total possible points
 REPORT="/home/student/grade_report.txt"; : > "$REPORT"
 
 # Colors + symbols (disable colors if not a TTY)
@@ -36,9 +38,9 @@ summary() {
     echo -e "$1" >> "$REPORT"
 }
 
-ok(){ PASS=$((PASS+1)); }
+ok(){ PASS=$((PASS+1)); POINTS_PASS=$((POINTS_PASS+2)); }
 bad(){ FAIL=$((FAIL+1)); }
-add(){ TOTAL=$((TOTAL+1)); }
+add(){ TOTAL=$((TOTAL+1)); POINTS_TOTAL=$((POINTS_TOTAL+2)); }
 
 # SSH helpers
 rcmd(){ ssh $SSHOPTS "student@$1" "${2:-true}"; }
@@ -99,9 +101,11 @@ if ! rcmd "$SERVERA" "getent group webops >/dev/null" && \
     TOTAL=49
     PASS=0
     FAIL=49
+    POINTS_TOTAL=$((TOTAL*2))
+    POINTS_PASS=0
     summary "Environment appears unconfigured (no exam users/groups found)."
     summary "RESULT: FAIL"
-    summary "SCORE: 0/$TOTAL = 0%"
+    summary "SCORE: $POINTS_PASS/$POINTS_TOTAL = 0%"
     summary "Report saved to: $REPORT"
     exit 1
 fi
@@ -132,11 +136,11 @@ task "User 'carol' exists (servera)" \
 
 # Service accounts (no shell + locked)
 task "Service account 'websvc' has no shell (/sbin/nologin) on servera" \
-     rsudo "$SERVERA" "getent passwd websvc | grep -q '/sbin/nologin'"
+     rsudo "$SERVERA" "getent passwd websvc | grep -Eq '/sbin/nologin|/usr/sbin/nologin'"
 task "Service account 'websvc' password locked on servera" \
      rsudo "$SERVERA" "passwd -S websvc 2>/dev/null | grep -qi 'locked'"
 task "Service account 'secmon' has no shell (/sbin/nologin) on serverb" \
-     rsudo "$SERVERB" "getent passwd secmon | grep -q '/sbin/nologin'"
+     rsudo "$SERVERB" "getent passwd secmon | grep -Eq '/sbin/nologin|/usr/sbin/nologin'"
 task "Service account 'secmon' password locked on serverb" \
      rsudo "$SERVERB" "passwd -S secmon 2>/dev/null | grep -qi 'locked'"
 
@@ -162,18 +166,19 @@ task "System-wide default umask is 0022 (servera)" \
 echo
 echo -e "${YELLOW}PHASE 2: SSH Hardening (serverb)${RESET}"
 
-# Precompute sshd config
-SSHD_T="$(rsudo "$SERVERB" "sshd -T 2>/dev/null" || true)"
-PORT="$(awk '/^port /{print $2}' <<<"$SSHD_T" | head -n1)"
+SSHD_CONF="/etc/ssh/sshd_config"
+
+# Get the effective port from sshd_config (last Port line wins)
+PORT="$(rsudo "$SERVERB" "grep -i '^Port ' $SSHD_CONF | tail -n1 | awk '{print \$2}'" || true)"
 
 check_sshd_port() {
   [[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1024 && "$PORT" -ne 22 ]]
 }
 check_passwordauth_no() {
-  gre "$SSHD_T" "^passwordauthentication no"
+  rsudo "$SERVERB" "grep -qi '^PasswordAuthentication no' $SSHD_CONF"
 }
 check_allowgroups_webops() {
-  gre "$SSHD_T" "^allowgroups webops"
+  rsudo "$SERVERB" "grep -qi '^AllowGroups webops' $SSHD_CONF"
 }
 
 task "sshd listening on non-default high port (>=1024, !=22) on serverb" \
@@ -186,7 +191,7 @@ task "AllowGroups restricted to 'webops' in sshd_config (serverb)" \
 task "sshd actually bound to configured port on serverb" \
      rsudo "$SERVERB" "ss -lntp | grep -q \":$PORT .*sshd\""
 task "SELinux ssh_port_t includes sshd port on serverb" \
-     rsudo "$SERVERB" "semanage port -l | grep -E '^ssh_port_t' | grep -w $PORT"
+     rsudo "$SERVERB" "semanage port -l | grep -E '^ssh_port_t' | grep -w $PORT >/dev/null"
 task "Firewall allows sshd port on serverb" \
      rsudo "$SERVERB" "firewall-cmd --zone=public --list-ports | grep -qw ${PORT}/tcp"
 
@@ -264,7 +269,7 @@ echo
 echo -e "${YELLOW}PHASE 5: Logging and Analysis (serverb)${RESET}"
 
 task "journald logs persistent on serverb (/var/log/journal exists, readable)" \
-     rsudo "$SERVERB" "test -d /var/log/journal && journalctl --directory=/var/log/journal -n1 >/dev/null"
+     rsudo "$SERVERB" "test -d /var/log/journal && ls /var/log/journal/* >/dev/null 2>&1"
 task "journald shows at least one failed SSH password attempt today (serverb)" \
      rsudo "$SERVERB" "journalctl -S today -u sshd | grep -qi 'Failed password'"
 task "journald shows at least one successful public-key login today (serverb)" \
@@ -280,7 +285,10 @@ task "Firewall: cockpit service reachable on serverb" \
 # PHASE 7: Reboot & Persistence
 ########################################
 echo
-echo -e "${YELLOW}Post-reboot rechecks${RESET}"
+echo -e "${YELLOW}PHASE 7: Reboot & Persistence${RESET}"
+
+task "servera has been rebooted after exam start marker" check_reboot "$SERVERA"
+task "serverb has been rebooted after exam start marker" check_reboot "$SERVERB"
 
 if [[ -n "$PORT" ]]; then
   task "Post-reboot: alice key login to serverb still works" \
@@ -304,14 +312,14 @@ task "Post-reboot: http://servera:82/x/index.html still returns 'I am servera.'"
 ########################################
 
 pct=0
-if [ "$TOTAL" -gt 0 ]; then
-  pct=$(( 100 * PASS / TOTAL ))
+if [ "$POINTS_TOTAL" -gt 0 ]; then
+  pct=$(( 100 * POINTS_PASS / POINTS_TOTAL ))
 fi
 
 echo
 echo "----------------------------------------"
 summary "RESULT: $([ "$FAIL" -eq 0 ] && echo PASS || echo FAIL)"
-summary "SCORE: $PASS/$TOTAL = ${pct}%"
+summary "SCORE: $POINTS_PASS/$POINTS_TOTAL = ${pct}%"
 summary "Report saved to: $REPORT"
 echo "----------------------------------------"
 
