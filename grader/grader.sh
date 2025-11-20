@@ -13,13 +13,24 @@ SSHOPTS="-o StrictHostKeyChecking=no \
          -o ControlPath=${CONTROL_PATH} \
          -o ControlPersist=300 -q"
 
-PASS=0; FAIL=0; TOTAL=0
+PASS=0
+FAIL=0
+TOTAL=0
 REPORT="/home/student/grade_report.txt"; : > "$REPORT"
 
-# Write only to report
-say() { echo -e "$1" >> "$REPORT"; }
+# Colors + symbols (disable colors if not a TTY)
+if [ -t 1 ]; then
+  GREEN="\e[32m"
+  RED="\e[31m"
+  YELLOW="\e[33m"
+  RESET="\e[0m"
+else
+  GREEN=""; RED=""; YELLOW=""; RESET=""
+fi
+CHECK="✔"
+CROSS="✘"
 
-# Write to report + stdout (for final summary only)
+# Summary writer (used only at the end)
 summary() {
     echo -e "$1"
     echo -e "$1" >> "$REPORT"
@@ -28,41 +39,60 @@ summary() {
 ok(){ PASS=$((PASS+1)); }
 bad(){ FAIL=$((FAIL+1)); }
 add(){ TOTAL=$((TOTAL+1)); }
-mark(){
-    add
-    if "$@"; then
-        ok
-        say "PASS: $*"
-    else
-        bad
-        say "FAIL: $*"
-    fi
-}
 
 # SSH helpers
 rcmd(){ ssh $SSHOPTS "student@$1" "${2:-true}"; }
-rsudo(){ ssh $SSHOPTS "student@$1" "echo student | sudo -S bash -lc '$2'"; }
+
+# NOTE: everything passed to rsudo must be a *single-quoted* string (no unescaped double quotes)
+rsudo(){
+  local host="$1"
+  shift
+  local cmd="$*"
+  ssh $SSHOPTS "student@$host" "echo student | sudo -S bash -lc \"$cmd\""
+}
+
 gre(){ grep -Eq "$2" <<<"$1"; }
 
-# Prime SSH master connections (one password prompt per host)
+# Task runner: one label, one check, pretty output
+task() {
+  local label="$1"; shift
+  add
+  if "$@"; then
+    ok
+    printf "%b[%s] %s%b\n" "$GREEN" "$CHECK" "$label" "$RESET"
+    echo "[PASS] $label" >> "$REPORT"
+  else
+    bad
+    printf "%b[%s] %s%b\n" "$RED" "$CROSS" "$label" "$RESET"
+    echo "[FAIL] $label" >> "$REPORT"
+  fi
+  sleep 1
+}
+
+echo "=== RHEL Practical Auto-Grader ==="
+echo "Running checks... (this may take a minute)"
+echo "Detailed report: $REPORT"
+echo "----------------------------------------"
+
+echo "=== RHEL Practical Auto-Grader ===" >> "$REPORT"
+date >> "$REPORT"
+
+# Prime SSH master connections (one password prompt per host, ideally)
 ssh $SSHOPTS -MNf "student@$SERVERA" || true
 ssh $SSHOPTS -MNf "student@$SERVERB" || true
-
-say "=== RHEL Practical Auto-Grader ==="
-say "$(date)"
 
 # Helper: check reboot after exam marker
 check_reboot(){
   local host="$1"
   local boot exam
   boot=$(rcmd "$host" "stat -c %Y /proc/1" 2>/dev/null || echo 0)
-  exam=$(rsudo "$host" "cat /root/.exam_start 2>/dev/null || echo 0")
+  exam=$(rsudo "$host" 'cat /root/.exam_start 2>/dev/null || echo 0')
   [[ ${boot:-0} -gt ${exam:-0} ]]
 }
 
 # ---- SHORT-CIRCUIT: pristine environment -> 0/49 ----
 # If there is no webops group and no alice user on servera,
-# we assume the student hasn't started the exam yet.
+# assume the student hasn't started the exam yet.
 if ! rcmd "$SERVERA" "getent group webops >/dev/null" && \
    ! rcmd "$SERVERA" "getent passwd alice >/dev/null"; then
     TOTAL=49
@@ -76,95 +106,212 @@ if ! rcmd "$SERVERA" "getent group webops >/dev/null" && \
 fi
 # ------------------------------------------------------
 
-say "\n[SELinux enforcing]"
-mark rcmd "$SERVERA" "getenforce | grep -xq Enforcing"
-mark rcmd "$SERVERB" "getenforce | grep -xq Enforcing"
+echo
+echo -e "${YELLOW}GLOBAL: SELinux state${RESET}"
+task "SELinux Enforcing on servera" rcmd "$SERVERA" "getenforce | grep -xq Enforcing"
+task "SELinux Enforcing on serverb" rcmd "$SERVERB" "getenforce | grep -xq Enforcing"
 
-say "\n[Phase 1: Users/Groups/Access on servera]"
-mark rcmd "$SERVERA" "getent group webops >/dev/null"
-mark rcmd "$SERVERA" "getent group secops >/dev/null"
-mark rcmd "$SERVERA" "id -nG alice | grep -qw webops"
-mark rcmd "$SERVERA" "id -nG bob   | grep -qw secops"
-mark rcmd "$SERVERA" "id carol >/dev/null"
+########################################
+# PHASE 1: Users, Groups, and Access (servera)
+########################################
+echo
+echo -e "${YELLOW}PHASE 1: Users, Groups, and Access (servera)${RESET}"
 
-say "\n[Service accounts]"
-mark rsudo "$SERVERA" "getent passwd websvc | grep -q '/sbin/nologin'"
-mark rsudo "$SERVERA" "passwd -S websvc 2>/dev/null | grep -qi 'locked'"
-mark rsudo "$SERVERB" "getent passwd secmon | grep -q '/sbin/nologin'"
-mark rsudo "$SERVERB" "passwd -S secmon 2>/dev/null | grep -qi 'locked'"
+# Groups
+task "Create group 'webops' (servera)" rcmd "$SERVERA" "getent group webops >/dev/null"
+task "Create group 'secops' (servera)" rcmd "$SERVERA" "getent group secops >/dev/null"
 
-say "\n[Directories & modes (servera)]"
-mark rcmd "$SERVERA" "stat -c '%a %G %n' /srv/shared | grep -q '^2775 webops /srv/shared$'"
-mark rcmd "$SERVERA" "stat -c '%a %G %n' /srv/drop   | grep -q '^1777 secops /srv/drop$'"
-mark rcmd "$SERVERA" "stat -c '%a %G %n' /srv/secure | grep -q '^750 secops /srv/secure$'"
+# Users
+task "User 'alice' in primary group 'webops' (servera)" \
+     rcmd "$SERVERA" "id -nG alice | grep -qw webops"
+task "User 'bob' in primary group 'secops' (servera)" \
+     rcmd "$SERVERA" "id -nG bob   | grep -qw secops"
+task "User 'carol' exists (servera)" \
+     rcmd "$SERVERA" "id carol >/dev/null"
 
-say "\n[ACLs (servera)]"
-mark rsudo "$SERVERA" "getfacl -p /srv/secure | grep -Eq '^default:user:alice:.*r'"
+# Service accounts (no shell + locked)
+task "Service account 'websvc' has no shell (/sbin/nologin) on servera" \
+     rsudo "$SERVERA" "getent passwd websvc | grep -q '/sbin/nologin'"
+task "Service account 'websvc' password locked on servera" \
+     rsudo "$SERVERA" "passwd -S websvc 2>/dev/null | grep -qi 'locked'"
+task "Service account 'secmon' has no shell (/sbin/nologin) on serverb" \
+     rsudo "$SERVERB" "getent passwd secmon | grep -q '/sbin/nologin'"
+task "Service account 'secmon' password locked on serverb" \
+     rsudo "$SERVERB" "passwd -S secmon 2>/dev/null | grep -qi 'locked'"
 
-say "\n[umask (servera)]"
-mark rcmd "$SERVERA" "bash -lc 'umask' | grep -xq 0022"
+# Directories & modes
+task "/srv/shared: root:webops, SGID, mode 2775 (servera)" \
+     rcmd "$SERVERA" "stat -c '%a %G %n' /srv/shared | grep -q '^2775 webops /srv/shared$'"
+task "/srv/drop: root:secops, sticky, mode 1777 (servera)" \
+     rcmd "$SERVERA" "stat -c '%a %G %n' /srv/drop   | grep -q '^1777 secops /srv/drop$'"
+task "/srv/secure: root:secops, mode 750 (servera)" \
+     rcmd "$SERVERA" "stat -c '%a %G %n' /srv/secure | grep -q '^750 secops /srv/secure$'"
 
-say "\n[Phase 2: SSH hardening on serverb]"
+# ACL
+task "POSIX default ACL: 'alice' has read-only on new files in /srv/secure (servera)" \
+     rsudo "$SERVERA" "getfacl -p /srv/secure | grep -Eq '^default:user:alice:.*r'"
+
+# umask
+task "System-wide default umask is 0022 (servera)" \
+     rcmd "$SERVERA" "bash -lc 'umask' | grep -xq 0022"
+
+########################################
+# PHASE 2: SSH Hardening (serverb)
+########################################
+echo
+echo -e "${YELLOW}PHASE 2: SSH Hardening (serverb)${RESET}"
+
+# Precompute sshd config
 SSHD_T="$(rsudo "$SERVERB" "sshd -T 2>/dev/null" || true)"
 PORT="$(awk '/^port /{print $2}' <<<"$SSHD_T" | head -n1)"
-add; if [[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1024 && "$PORT" -ne 22 ]]; then ok; say "PASS: sshd high port $PORT"; else bad; say "FAIL: sshd high port invalid ($PORT)"; fi
-add; if gre "$SSHD_T" "^passwordauthentication no"; then ok; say "PASS: PasswordAuthentication no"; else bad; say "FAIL: PasswordAuthentication not no"; fi
-add; if gre "$SSHD_T" "^allowgroups webops"; then ok; say "PASS: AllowGroups webops"; else bad; say "FAIL: AllowGroups not webops"; fi
-mark rsudo "$SERVERB" "ss -lntp | grep -q \":$PORT .*sshd\""
-mark rsudo "$SERVERB" "semanage port -l | grep -E '^ssh_port_t' | grep -Eq '(^|[^0-9])'"$PORT"'([^0-9]|$)'"
-mark rsudo "$SERVERB" "firewall-cmd --zone=public --list-ports | grep -qw ${PORT}/tcp"
 
-say "\n[SSH auth behavior (serverb)]"
-add; if ! ssh $SSHOPTS -p "$PORT" -o PreferredAuthentications=password -o PubkeyAuthentication=no "student@$SERVERB" true; then ok; say "PASS: password login blocked"; else bad; say "FAIL: password login succeeded"; fi
-add; if ssh $SSHOPTS -p "$PORT" "alice@$SERVERB" 'true'; then ok; say "PASS: alice key login ok"; else bad; say "FAIL: alice key login failed"; fi
-add; if ! ssh $SSHOPTS -p "$PORT" "bob@$SERVERB" 'true'; then ok; say "PASS: bob blocked by AllowGroups"; else bad; say "FAIL: bob unexpectedly allowed"; fi
+check_sshd_port() {
+  [[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1024 && "$PORT" -ne 22 ]]
+}
+check_passwordauth_no() {
+  gre "$SSHD_T" "^passwordauthentication no"
+}
+check_allowgroups_webops() {
+  gre "$SSHD_T" "^allowgroups webops"
+}
 
-say "\n[Phase 3: Web & firewall on servera]"
-mark rcmd "$SERVERA" "systemctl is-enabled httpd | grep -xq enabled"
-mark rcmd "$SERVERA" "systemctl is-active httpd | grep -xq active"
-mark rsudo "$SERVERA" "firewall-cmd --zone=public --list-services | grep -qw https"
-add; if curl -sk "https://$SERVERA" | grep -qx "I am servera."; then ok; say "PASS: curl https"; else bad; say "FAIL: curl https"; fi
+task "sshd listening on non-default high port (>=1024, !=22) on serverb" \
+     check_sshd_port
+task "PasswordAuthentication disabled in sshd_config (serverb)" \
+     check_passwordauth_no
+task "AllowGroups restricted to 'webops' in sshd_config (serverb)" \
+     check_allowgroups_webops
 
-say "\n[Phase 4: Port 82 + SELinux (servera)]"
-mark rsudo "$SERVERA" "semanage port -l | grep '^http_port_t' | grep -Eq '(^|[^0-9])82([^0-9]|$)'"
-mark rsudo "$SERVERA" "firewall-cmd --zone=public --list-ports | grep -qw 82/tcp"
-add; if curl -s "http://$SERVERA:82" | grep -q "."; then ok; say "PASS: curl :82 works"; else bad; say "FAIL: curl :82 failed"; fi
+task "sshd actually bound to configured port on serverb" \
+     rsudo "$SERVERB" "ss -lntp | grep -q \":$PORT .*sshd\""
+task "SELinux ssh_port_t includes sshd port on serverb" \
+     rsudo "$SERVERB" "semanage port -l | grep -E '^ssh_port_t' | grep -w $PORT"
+task "Firewall allows sshd port on serverb" \
+     rsudo "$SERVERB" "firewall-cmd --zone=public --list-ports | grep -qw ${PORT}/tcp"
 
-say "\n[Phase 5: SELinux fcontext + alias (servera)]"
-mark rsudo "$SERVERA" "semanage fcontext -l | grep -E '^/srv/www-extra(\(/\.\*\)\?)?\s+all\s+system_u:object_r:httpd_sys_content_t:s0'"
-add; if curl -s "http://$SERVERA:82/x/index.html" | grep -qx "I am servera."; then ok; say "PASS: alias /x from /srv/www-extra"; else bad; say "FAIL: alias /x failed"; fi
+echo
+echo -e "${YELLOW}PHASE 2: SSH Authentication Behavior (serverb)${RESET}"
 
-say "\n[No web on serverb]"
-add; if ! rcmd "$SERVERB" "systemctl is-active httpd 2>/dev/null | grep -qx active"; then ok; say "PASS: httpd not active"; else bad; say "FAIL: httpd active on serverb"; fi
-add; if ! rcmd "$SERVERB" "systemctl is-enabled httpd 2>/dev/null | grep -qx enabled"; then ok; say "PASS: httpd not enabled"; else bad; say "FAIL: httpd enabled on serverb"; fi
+if [[ -n "$PORT" ]]; then
+  task "Password login to serverb (on new port) is blocked" \
+       bash -lc "! ssh $SSHOPTS -p \"$PORT\" -o PreferredAuthentications=password -o PubkeyAuthentication=no \"student@$SERVERB\" true"
+  task "Key-based SSH login as 'alice' to serverb succeeds" \
+       bash -lc "ssh $SSHOPTS -p \"$PORT\" \"alice@$SERVERB\" true"
+  task "'bob' cannot SSH to serverb (blocked by AllowGroups)" \
+       bash -lc "! ssh $SSHOPTS -p \"$PORT\" \"bob@$SERVERB\" true"
+else
+  # If we couldn't detect a port, record 3 fails but don't blow up with 'Bad port'
+  task "Password login blocked (no ssh port detected)" false
+  task "alice key login (no ssh port detected)" false
+  task "bob blocked by AllowGroups (no ssh port detected)" false
+fi
 
-say "\n[Phase 6: Logging/journald/cockpit]"
-mark rsudo "$SERVERB" "test -d /var/log/journal && journalctl --directory=/var/log/journal -n1 >/dev/null"
-mark rsudo "$SERVERB" "journalctl -S today -u sshd | grep -qi 'Failed password'"
-mark rsudo "$SERVERB" "journalctl -S today -u sshd | grep -qi 'publickey'"
-mark rsudo "$SERVERB" "ausearch -m AVC -ts today | grep -q 'avc:'"
-mark rsudo "$SERVERA" "firewall-cmd --zone=public --list-services | grep -qw cockpit"
-mark rsudo "$SERVERB" "firewall-cmd --zone=public --list-services | grep -qw cockpit"
+########################################
+# PHASE 3: Web and Firewall (servera)
+########################################
+echo
+echo -e "${YELLOW}PHASE 3: Web and Firewall (servera)${RESET}"
 
-say "\n[Phase 7: Reboot & persistence]"
-mark check_reboot "$SERVERA"
-mark check_reboot "$SERVERB"
+task "Apache httpd service enabled (servera)" \
+     rcmd "$SERVERA" "systemctl is-enabled httpd | grep -xq enabled"
+task "Apache httpd service active (running) on servera" \
+     rcmd "$SERVERA" "systemctl is-active httpd | grep -xq active"
+task "Firewall: https service allowed (servera)" \
+     rsudo "$SERVERA" "firewall-cmd --zone=public --list-services | grep -qw https"
+task "From workstation: https://servera returns 'I am servera.'" \
+     bash -lc "curl -sk \"https://$SERVERA\" | grep -qx 'I am servera.'"
 
-say "\n[Post-reboot rechecks]"
-add; if ssh $SSHOPTS -p "$PORT" "alice@$SERVERB" 'true'; then ok; say "PASS: alice key login persists"; else bad; say "FAIL: alice key login not persistent"; fi
-add; if ! ssh $SSHOPTS -p "$PORT" "bob@$SERVERB" 'true'; then ok; say "PASS: bob remains blocked"; else bad; say "FAIL: bob allowed post-reboot"; fi
-add; if curl -sk "https://$SERVERA" | grep -qx "I am servera."; then ok; say "PASS: https persists"; else bad; say "FAIL: https not persistent"; fi
-add; if curl -s "http://$SERVERA:82" | grep -q "."; then ok; say "PASS: :82 persists"; else bad; say "FAIL: :82 not persistent"; fi
-add; if curl -s "http://$SERVERA:82/x/index.html" | grep -qx "I am servera."; then ok; say "PASS: alias persists"; else bad; say "FAIL: alias not persistent"; fi
+########################################
+# PHASE 4: Port 82 + SELinux (servera)
+########################################
+echo
+echo -e "${YELLOW}PHASE 4: Web on port 82 + SELinux (servera)${RESET}"
 
-# summary + scoring
+task "SELinux http_port_t includes port 82 (servera)" \
+     rsudo "$SERVERA" "semanage port -l | grep '^http_port_t' | grep -w 82"
+task "Firewall allows port 82/tcp (servera)" \
+     rsudo "$SERVERA" "firewall-cmd --zone=public --list-ports | grep -qw 82/tcp"
+task "From workstation: http://servera:82 responds" \
+     bash -lc "curl -s \"http://$SERVERA:82\" | grep -q '.'"
+
+########################################
+# PHASE 4 (continued): SELinux fcontext + Alias (servera)
+########################################
+echo
+echo -e "${YELLOW}PHASE 4: SELinux fcontext + /x/ alias (servera)${RESET}"
+
+task "SELinux fcontext: /srv/www-extra(/...) labeled httpd_sys_content_t" \
+     rsudo "$SERVERA" "semanage fcontext -l | grep -E '^/srv/www-extra(/.*)?' | grep -q httpd_sys_content_t"
+task "From workstation: http://servera:82/x/index.html shows 'I am servera.'" \
+     bash -lc "curl -s \"http://$SERVERA:82/x/index.html\" | grep -qx 'I am servera.'"
+
+########################################
+# EXTRA: No web on serverb
+########################################
+echo
+echo -e "${YELLOW}CHECK: No unintended web server on serverb${RESET}"
+
+task "httpd not active (running) on serverb" \
+     rcmd "$SERVERB" "systemctl is-active httpd 2>/dev/null | grep -qxv active"
+task "httpd not enabled on boot on serverb" \
+     rcmd "$SERVERB" "systemctl is-enabled httpd 2>/dev/null | grep -qxv enabled"
+
+########################################
+# PHASE 5: Logging and Analysis (serverb)
+########################################
+echo
+echo -e "${YELLOW}PHASE 5: Logging and Analysis (serverb)${RESET}"
+
+task "journald logs persistent on serverb (/var/log/journal exists, readable)" \
+     rsudo "$SERVERB" "test -d /var/log/journal && journalctl --directory=/var/log/journal -n1 >/dev/null"
+task "journald shows at least one failed SSH password attempt today (serverb)" \
+     rsudo "$SERVERB" "journalctl -S today -u sshd | grep -qi 'Failed password'"
+task "journald shows at least one successful public-key login today (serverb)" \
+     rsudo "$SERVERB" "journalctl -S today -u sshd | grep -qi 'publickey'"
+task "SELinux logs an AVC denial today (e.g., sshd bind attempt) on serverb" \
+     rsudo "$SERVERB" "ausearch -m AVC -ts today | grep -q 'avc:'"
+task "Firewall: cockpit service reachable on servera" \
+     rsudo "$SERVERA" "firewall-cmd --zone=public --list-services | grep -qw cockpit"
+task "Firewall: cockpit service reachable on serverb" \
+     rsudo "$SERVERB" "firewall-cmd --zone=public --list-services | grep -qw cockpit"
+
+########################################
+# PHASE 7: Reboot & Persistence
+########################################
+echo
+echo -e "${YELLOW}PHASE 7: Reboot & Persistence${RESET}"
+
+task "servera has been rebooted after exam start marker" check_reboot "$SERVERA"
+task "serverb has been rebooted after exam start marker" check_reboot "$SERVERB"
+
+echo
+echo -e "${YELLOW}Post-reboot rechecks${RESET}"
+
+task "Post-reboot: alice key login to serverb still works" \
+     bash -lc "ssh $SSHOPTS -p \"$PORT\" \"alice@$SERVERB\" true"
+task "Post-reboot: bob remains blocked from SSH to serverb" \
+     bash -lc "! ssh $SSHOPTS -p \"$PORT\" \"bob@$SERVERB\" true"
+task "Post-reboot: https://servera still returns 'I am servera.'" \
+     bash -lc "curl -sk \"https://$SERVERA\" | grep -qx 'I am servera.'"
+task "Post-reboot: http://servera:82 still responds" \
+     bash -lc "curl -s \"http://$SERVERA:82\" | grep -q '.'"
+task "Post-reboot: http://servera:82/x/index.html still returns 'I am servera.'" \
+     bash -lc "curl -s \"http://$SERVERA:82/x/index.html\" | grep -qx 'I am servera.'"
+
+########################################
+# SUMMARY
+########################################
+
 pct=0
 if [ "$TOTAL" -gt 0 ]; then
   pct=$(( 100 * PASS / TOTAL ))
 fi
 
+echo
+echo "----------------------------------------"
 summary "RESULT: $([ "$FAIL" -eq 0 ] && echo PASS || echo FAIL)"
 summary "SCORE: $PASS/$TOTAL = ${pct}%"
 summary "Report saved to: $REPORT"
+echo "----------------------------------------"
 
 [ "$FAIL" -eq 0 ] || exit 1
